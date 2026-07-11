@@ -19,7 +19,7 @@ from aiohttp import web
 import cv2, ddddocr, numpy as np
 
 # ─── CONFIGURATION ───
-BOT_TOKEN = "8809913843:AAGevNkeQJtPVNyr6u2R9KrdZvsy0KN9sJw"
+BOT_TOKEN = "8677469363:AAGDoeUegME2KT4XdOniszKn_XmvliunErA"
 ADMIN_ID = "5510812164"
 bot = AsyncTeleBot(BOT_TOKEN)
 
