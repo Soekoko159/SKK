@@ -124,7 +124,10 @@ async def welcome(message):
 
 @bot.message_handler(commands=['setup'])
 async def setup(message):
-    if not approve.get(message.chat.id): return
+@bot.message_handler(commands=["setup"])
+async def setup(message):
+    args = message.text.split()
+    if len(args) < 2: return await bot.reply_to(message, "Usage: /setup [url]")
     args = message.text.split()
     if len(args) < 2: return await bot.reply_to(message, "Usage: /setup [url]")
     user_data[message.chat.id] = {"url": args[1]}
