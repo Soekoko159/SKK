@@ -19,9 +19,9 @@ from aiohttp import web
 import cv2, ddddocr, numpy as np
 
 # ─── CONFIGURATION ───
-# BotFather ပုံထဲက Token အမှန်ကို ကွက်တိထည့်ပေးထားပါတယ်
-BOT_TOKEN = "8677469363:AAEjM46FrIoL7FQ2N2LrumK6TDbQjNUgevM"
-ADMIN_ID = "5510812164"
+# Render ရော ကုဒ်ထဲကပါ နှစ်ခုစလုံး အလုပ်လုပ်အောင် ပြင်ဆင်ထားပါတယ်
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8677469363:AAEjM46FrIoL7FQ2N2LrumK6TDbQjNUgevM")
+ADMIN_ID = os.environ.get("ADMIN_ID", "5510812164")
 bot = AsyncTeleBot(BOT_TOKEN)
 
 _ocr = None
